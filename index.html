@@ -33,13 +33,15 @@
   .sub { color:var(--muted); font-size:.75rem; }
   .row { display:flex; align-items:center; gap:10px; }
   .grow { flex:1; }
-  .weight { display:flex; align-items:center; gap:4px; margin:0; }
-  .weight input { width:64px; font-size:1.05rem; padding:4px 6px; text-align:center; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--text); }
-  .weight .step { width:32px; height:32px; border-radius:8px; border:1px solid var(--line); background:var(--bg); color:var(--text); font-size:1.1rem; cursor:pointer; }
+  .weight { display:flex; align-items:center; gap:3px; margin-top:4px; }
+  .weight input { width:52px; font-size:1rem; padding:3px 2px; text-align:center; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--text); }
+  .weight .step { width:28px; height:28px; padding:0; border-radius:8px; border:1px solid var(--line); background:var(--bg); color:var(--text); font-size:1.1rem; cursor:pointer; }
   .tag { font-size:.75rem; padding:2px 8px; border-radius:99px; background:var(--bg); border:1px solid var(--line); color:var(--muted); }
   .tag.up { color:var(--ok); border-color:var(--ok); }
-  .sets { display:grid; grid-template-columns:repeat(5,1fr); gap:6px; margin-top:7px; }
-  .set { height:40px; border-radius:20px; border:2px solid var(--line); background:var(--bg); color:var(--muted); font-size:1.1rem; font-weight:600; cursor:pointer; user-select:none; }
+  .lift { display:flex; align-items:center; gap:8px; }
+  .info { flex:1; min-width:0; }
+  .sets { display:flex; gap:4px; }
+  .set { width:32px; height:32px; padding:0; flex:none; border-radius:50%; border:2px solid var(--line); background:var(--bg); color:var(--muted); font-size:1rem; font-weight:600; cursor:pointer; user-select:none; }
   .set.done { background:var(--ok); border-color:var(--ok); color:#fff; }
   .set.part { background:var(--warn); border-color:var(--warn); color:#fff; }
   .set.miss { background:var(--bad); border-color:var(--bad); color:#fff; }
@@ -76,7 +78,9 @@
 (() => {
   'use strict';
 
-  const INCREMENT = 2.5;       // kg added each workout
+  const INCREMENTS = { 'Deadlift':5 };   // kg added each workout (default below)
+  const DEFAULT_INC = 2.5;
+  const inc = lift => INCREMENTS[lift] || DEFAULT_INC;
   const SETS = 5, REPS = 5;
   const WORKOUTS = {
     A: ['Squat', 'Bench Press', 'Barbell Row'],
@@ -119,7 +123,7 @@
   // Weight to use next: last logged weight + 2.5, or the starting weight on first ever use.
   function targetWeight(lift) {
     const w = lastWeight(lift);
-    return w === null ? Number(state.start[lift]) : w + INCREMENT;
+    return w === null ? Number(state.start[lift]) : w + inc(lift);
   }
   function buildDraft() {
     const type = nextType();
@@ -155,7 +159,7 @@
   function renderSetup() {
     const rows = ALL_LIFTS.map(l => `<label>${l}<span><input type="number" step="2.5" min="0" data-l="${l}" value="${state.start[l]}"> kg</span></label>`).join('');
     const c = el(`<div class="card setup"><h2>Starting weights</h2>
-      <p class="hint">Enter the weight you'll use for your <b>first</b> workout. After that each lift goes up ${INCREMENT} kg every time you open the app for the next session. Start light (empty bar is 20 kg).</p>
+      <p class="hint">Enter the weight you'll use for your <b>first</b> workout. After that each lift goes up ${DEFAULT_INC} kg (deadlift ${INCREMENTS.Deadlift} kg) every session. Start light (empty bar is 20 kg).</p>
       ${rows}<div style="height:10px"></div><button class="primary" id="go">Start program</button></div>`);
     c.querySelector('#go').onclick = () => {
       c.querySelectorAll('input').forEach(i => { state.start[i.dataset.l] = Number(i.value) || 0; });
@@ -169,16 +173,16 @@
     const d = state.draft;
     const last = state.history[state.history.length - 1];
     const intro = el(`<div class="card"><div class="row"><div class="grow"><h2>Workout ${d.type} <span class="sub">#${state.history.length + 1}</span></h2>
-      <div class="sub">${last ? `Last: ${last.type} on ${last.date} · +${INCREMENT} kg applied` : 'First session · starting weights'}</div></div></div></div>`);
+      <div class="sub">${last ? `Last: ${last.type} on ${last.date} · weights increased` : 'First session · starting weights'}</div></div></div></div>`);
     view.append(intro);
 
     d.lifts.forEach((lift, li) => {
       const up = lift.prev !== null && lift.weight > lift.prev;
-      const c = el(`<div class="card"><div class="row"><div class="grow"><h2>${lift.name}</h2>
-        <div class="sub">${SETS}×${REPS}${lift.prev !== null ? ` · last ${fmt(lift.prev)}${up ? ` (+${fmt(lift.weight - lift.prev)})` : ''}` : ''}</div></div>
-        <div class="weight"><button class="step" data-d="-2.5">−</button>
+      const c = el(`<div class="card lift"><div class="info"><h2>${lift.name}</h2>
+        <div class="sub">${lift.prev !== null ? `last ${fmt(lift.prev)}${up ? ` (+${fmt(lift.weight - lift.prev)})` : ''}` : 'first time'}</div>
+        <div class="weight"><button class="step" data-d="-${inc(lift.name)}">−</button>
           <input type="number" step="0.5" min="0" value="${fmt(lift.weight)}"><span class="sub">kg</span>
-          <button class="step" data-d="2.5">+</button></div></div>
+          <button class="step" data-d="${inc(lift.name)}">+</button></div></div>
         <div class="sets"></div></div>`);
       const input = c.querySelector('input');
       input.onchange = () => { lift.weight = Math.max(0, Number(input.value) || 0); save(); };
