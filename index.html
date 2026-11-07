@@ -3,11 +3,11 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>5x5 Tracker</title>
+<title>Tracker</title>
 <meta name="theme-color" content="#2563eb">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-title" content="5x5">
+<meta name="apple-mobile-web-app-title" content="Tracker">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
@@ -60,7 +60,7 @@
 <body>
 <main>
   <header>
-    <h1>5×5 Tracker</h1>
+    <h1>Tracker</h1>
     <span class="sub" id="today"></span>
   </header>
   <nav>
@@ -275,14 +275,14 @@
     c.querySelector('#exp').onclick = () => {
       const a = document.createElement('a');
       a.href = URL.createObjectURL(new Blob([JSON.stringify(state, null, 2)], { type:'application/json' }));
-      a.download = `5x5-backup-${new Date().toISOString().slice(0, 10)}.json`; a.click();
+      a.download = `tracker-backup-${new Date().toISOString().slice(0, 10)}.json`; a.click();
     };
     const file = c.querySelector('#file');
     c.querySelector('#imp').onclick = () => file.click();
     file.onchange = async () => {
       try {
         const s = JSON.parse(await file.files[0].text());
-        if (!s.history || !s.start) throw new Error('Not a 5x5 backup');
+        if (!s.history || !s.start) throw new Error('Not a tracker backup');
         if (!confirm('Replace current data with this backup?')) return;
         state = s; save(); render();
       } catch (e) { alert('Import failed: ' + e.message); }

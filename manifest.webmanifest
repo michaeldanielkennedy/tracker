@@ -1,7 +1,7 @@
 {
-  "name": "5x5 Tracker",
-  "short_name": "5x5",
-  "description": "Track a 5x5 strength program with A/B workouts and automatic +2.5 kg progression.",
+  "name": "Tracker",
+  "short_name": "Tracker",
+  "description": "Track a strength program with A/B workouts and automatic +2.5 kg progression.",
   "start_url": "./index.html",
   "scope": "./",
   "display": "standalone",
