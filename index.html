@@ -59,9 +59,9 @@
   .cal b { font-size:.7rem; color:var(--muted); font-weight:500; }
   .day { height:30px; border:0; border-radius:8px; background:transparent; color:var(--muted); font-size:.8rem; padding:0; }
   .day.today { box-shadow:inset 0 0 0 1.5px var(--accent); }
-  .day.tA, .day.tB { color:#fff; font-weight:700; cursor:pointer; }
-  .day.tA { background:var(--accent); }
-  .day.tB { background:var(--ok); }
+  .day.tw { color:#fff; font-weight:700; cursor:pointer; }
+  .legend { display:flex; flex-wrap:wrap; gap:4px 10px; margin-top:8px; font-size:.7rem; color:var(--muted); }
+  .legend i { display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:4px; vertical-align:middle; }
   .seg { display:flex; gap:4px; margin-bottom:7px; }
   .seg button { flex:1; padding:6px 0; border:1px solid var(--line); background:var(--card); color:var(--text); border-radius:8px; font-size:.8rem; cursor:pointer; }
   .seg button.on { background:var(--accent); border-color:var(--accent); color:#fff; }
@@ -74,8 +74,6 @@
   .xnums { display:grid; grid-template-columns:repeat(4,1fr); gap:6px; margin:6px 0; }
   .xnums label { display:block; font-size:.7rem; color:var(--muted); }
   .xnums input { width:100%; padding:6px; font-size:.9rem; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--text); }
-  .tC { background:#9333ea; }
-  .day.tC { background:#9333ea; color:#fff; font-weight:700; cursor:pointer; }
   .vd { margin-bottom:8px; }
   .vd textarea { width:100%; padding:7px 9px; font:inherit; font-size:.9rem; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--text); resize:vertical; }
   .lift.wide { flex-wrap:wrap; }
@@ -330,6 +328,14 @@
   const iso = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
   const parse = s => new Date(s + 'T00:00:00');
 
+  // One colour per program + workout letter, used on the calendar and history cards.
+  const WCOLOR = {
+    strength: { A:'#2563eb', B:'#16a34a' },
+    vol10:    { A:'#d97706', B:'#dc2626', C:'#9333ea' },
+    vol20:    { A:'#0891b2', B:'#be185d', C:'#65a30d' },
+  };
+  const wcolor = w => (WCOLOR[w.program || 'strength'] || WCOLOR.strength)[w.type] || '#6b7280';
+
   let calY = new Date().getFullYear(), calM = new Date().getMonth();
 
   function calendar() {
@@ -340,19 +346,22 @@
     const days = new Date(calY, calM + 1, 0).getDate();
     const todayStr = iso(new Date());
     const monthWorkouts = state.history.filter(w => w.date.startsWith(`${calY}-${pad(calM + 1)}`)).length;
+    const seen = new Map();
+    state.history.forEach(w => { const k = (w.program || 'strength') + w.type; if (!seen.has(k)) seen.set(k, w); });
+    const legend = seen.size ? `<div class="legend">${[...seen.values()].map(w => `<span><i style="background:${wcolor(w)}"></i>${(PROGRAMS[w.program || 'strength'] || PROGRAMS.strength).name} ${w.type}</span>`).join('')}</div>` : '';
     let cells = '';
     for (let i = 0; i < lead; i++) cells += '<span></span>';
     for (let d = 1; d <= days; d++) {
       const ds = `${calY}-${pad(calM + 1)}-${pad(d)}`;
       const w = byDay[ds];
-      const cls = 'day' + (ds === todayStr ? ' today' : '') + (w ? ' t' + w[w.length - 1].type : '');
-      cells += `<button class="${cls}" ${w ? `data-id="${w[0].id}"` : 'disabled'}>${w ? w[w.length - 1].type : d}</button>`;
+      const cls = 'day' + (ds === todayStr ? ' today' : '') + (w ? ' tw' : '');
+      cells += `<button class="${cls}" ${w ? `data-id="${w[0].id}" style="background:${wcolor(w[w.length - 1])}"` : 'disabled'}>${w ? w[w.length - 1].type : d}</button>`;
     }
     const c = el(`<div class="card"><div class="row"><button class="ghost" data-m="-1">‹</button>
       <div class="grow" style="text-align:center"><h2>${first.toLocaleDateString(undefined, { month:'long', year:'numeric' })}</h2>
       <div class="sub">${monthWorkouts} workout${monthWorkouts === 1 ? '' : 's'}</div></div>
       <button class="ghost" data-m="1">›</button></div>
-      <div class="cal"><b>M</b><b>T</b><b>W</b><b>T</b><b>F</b><b>S</b><b>S</b>${cells}</div></div>`);
+      <div class="cal"><b>M</b><b>T</b><b>W</b><b>T</b><b>F</b><b>S</b><b>S</b>${cells}</div>${legend}</div>`);
     c.querySelectorAll('[data-m]').forEach(b => b.onclick = () => {
       const d = new Date(calY, calM + Number(b.dataset.m), 1); calY = d.getFullYear(); calM = d.getMonth(); render();
     });
@@ -367,7 +376,7 @@
     if (!state.history.length) return view.append(el(`<div class="empty">No workouts yet.</div>`));
     [...state.history].reverse().forEach(w => {
       const rows = w.lifts.map(l => `<tr><td>${l.name}</td><td>${l.bw ? (l.weight ? 'BW + ' + fmt(l.weight) + ' kg' : 'BW') : fmt(l.weight) + ' kg'}</td><td>${l.reps.join(' / ')}</td></tr>`).join('');
-      const c = el(`<div class="card" id="w-${w.id}"><div class="row"><div class="grow"><h2>Workout ${w.type}</h2><div class="sub">${w.date} · ${PROGRAMS[w.program || 'strength'].name}</div></div>
+      const c = el(`<div class="card" id="w-${w.id}" style="border-left:4px solid ${wcolor(w)}"><div class="row"><div class="grow"><h2>Workout ${w.type}</h2><div class="sub">${w.date} · ${PROGRAMS[w.program || 'strength'].name}</div></div>
         <button class="ghost danger">Delete</button></div>
         <table><tr><th>Lift</th><th>Weight</th><th>Reps per set</th></tr>${rows}</table></div>`);
       c.querySelector('button').onclick = () => {
