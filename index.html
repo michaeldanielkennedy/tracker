@@ -74,6 +74,13 @@
   .xnums { display:grid; grid-template-columns:repeat(4,1fr); gap:6px; margin:6px 0; }
   .xnums label { display:block; font-size:.7rem; color:var(--muted); }
   .xnums input { width:100%; padding:6px; font-size:.9rem; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--text); }
+  .tC { background:#9333ea; }
+  .day.tC { background:#9333ea; color:#fff; font-weight:700; cursor:pointer; }
+  .vd { margin-bottom:8px; }
+  .vd textarea { width:100%; padding:7px 9px; font:inherit; font-size:.9rem; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--text); resize:vertical; }
+  .lift.wide { flex-wrap:wrap; }
+  .lift.wide .sets { flex:0 0 100%; display:grid; grid-template-columns:repeat(5,1fr); gap:5px; margin-top:6px; }
+  .lift.wide .set { width:100%; border-radius:10px; }
   .hint { color:var(--muted); font-size:.72rem; margin:2px 0 8px; }
   .empty { color:var(--muted); text-align:center; padding:24px 0; }
 </style>
@@ -100,7 +107,7 @@
   const INCREMENTS = { 'Deadlift':5 };   // kg added each workout (default below)
   const DEFAULT_INC = 2.5;
   const extraOf = name => (state.extras || []).find(e => e.name === name);
-  const inc = lift => { const e = extraOf(lift); return e ? e.inc : (INCREMENTS[lift] || DEFAULT_INC); };
+  const inc = lift => { const e = pid() === 'strength' && extraOf(lift); return e ? e.inc : (INCREMENTS[lift] || DEFAULT_INC); };
   const SETS = 5, REPS = 5;
   const WORKOUTS = {
     A: ['Squat', 'Bench Press', 'Barbell Row'],
@@ -110,61 +117,128 @@
   const DEFAULT_START = { 'Squat':20, 'Bench Press':20, 'Barbell Row':30, 'Overhead Press':20, 'Deadlift':40 };
   const KEY = 'fivebyfive.v1';
 
+  // Programs. 'strength' is the A/B 5x5; the two volume programs share one editable plan
+  // but keep separate history/weights (10x10 and 5x20 use different loads).
+  const PROGRAMS = {
+    strength: { name:'Strength 5×5',  order:['A','B'] },
+    vol10:    { name:'Volume 10×10',  order:['A','B','C'], sets:10, reps:10, startFactor:0.6 },
+    vol20:    { name:'Volume 5×20',   order:['A','B','C'], sets:5,  reps:20, startFactor:0.5 },
+  };
+  // One exercise per line. Plain name = the program's sets x reps. "3x12" overrides; trailing "bw" = bodyweight.
+  const DEFAULT_VOLUME_DAYS = {
+    A: ['Bench Press', 'Barbell Row', 'Incline Dumbbell Press 3x12', 'Lat Pulldown 3x12'],
+    B: ['Squat', 'Leg Curl', 'Calf Raise 3x15', 'Hanging Knee Raise 3x15 bw'],
+    C: ['Overhead Press', 'Barbell Curl', 'Triceps Pushdown 3x12', 'Lateral Raise 3x15'],
+  };
+
   // ---------- state ----------
   // { started:bool, start:{lift:kg}, history:[{id,date,type,lifts:[{name,weight,reps:[5,5,5,5,5]}]}], draft:{type,lifts:[...]}|null }
   let state = load();
   let tab = 'workout';
 
+  function normalize(s) {
+    s.extras = s.extras || [];
+    s.program = PROGRAMS[s.program] ? s.program : 'strength';
+    s.volumeDays = s.volumeDays || JSON.parse(JSON.stringify(DEFAULT_VOLUME_DAYS));
+    return s;
+  }
   function load() {
     try {
       const s = JSON.parse(localStorage.getItem(KEY));
-      if (s && s.history) { s.extras = s.extras || []; return s; }
+      if (s && s.history) return normalize(s);
     } catch (e) {}
-    return { started:false, start:{...DEFAULT_START}, history:[], draft:null, extras:[] };
+    return normalize({ started:false, start:{...DEFAULT_START}, history:[], draft:null });
   }
   function save() {
     try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) { alert('Could not save: ' + e.message); }
   }
 
   // ---------- logic ----------
+  const pid = () => (state && PROGRAMS[state.program]) ? state.program : 'strength';
+  const prog = () => PROGRAMS[pid()];
+  const hist = () => state.history.filter(w => (w.program || 'strength') === pid());
+
   function nextType() {
-    const last = state.history[state.history.length - 1];
-    if (!last) return 'A';
-    return last.type === 'A' ? 'B' : 'A';
+    const order = prog().order;
+    const last = hist()[hist().length - 1];
+    if (!last || !order.includes(last.type)) return order[0];
+    return order[(order.indexOf(last.type) + 1) % order.length];
   }
-  // Last completed weight for a lift (any workout), or null.
-  function lastWeight(lift) {
-    for (let i = state.history.length - 1; i >= 0; i--) {
-      const l = state.history[i].lifts.find(x => x.name === lift);
-      if (l) return l.weight;
+  // Most recent record of a lift within the current program, or null.
+  function lastLift(lift) {
+    const h = hist();
+    for (let i = h.length - 1; i >= 0; i--) {
+      const l = h[i].lifts.find(x => x.name === lift);
+      if (l) return l;
     }
     return null;
   }
-  // Weight to use next: last logged weight + 2.5, or the starting weight on first ever use.
-  function targetWeight(lift) {
-    const w = lastWeight(lift);
-    if (w !== null) return w + inc(lift);
-    const e = extraOf(lift);
-    return e ? e.start : Number(state.start[lift]);
+  const lastWeight = lift => { const l = lastLift(lift); return l ? l.weight : null; };
+
+  // First-ever weight for a lift in the current program.
+  function startWeight(lift, bw) {
+    if (bw) return 0;
+    if (pid() === 'strength') {
+      const e = extraOf(lift);
+      return e ? e.start : Number(state.start[lift]) || 0;
+    }
+    // Volume: derive from your latest strength weight (or starting weight) if it's a known lift, else 20 kg.
+    let base = null;
+    for (let i = state.history.length - 1; i >= 0 && base === null; i--) {
+      const w = state.history[i];
+      if ((w.program || 'strength') !== 'strength') continue;
+      const l = w.lifts.find(x => x.name === lift);
+      if (l) base = l.weight;
+    }
+    if (base === null && state.start[lift]) base = Number(state.start[lift]);
+    return base === null ? 20 : Math.max(2.5, Math.round(base * prog().startFactor / 2.5) * 2.5);
+  }
+  // Strength: always last + increment. Volume: only go up if every set hit the target reps, else repeat.
+  function targetWeight(lift, bw) {
+    const l = lastLift(lift);
+    if (!l) return startWeight(lift, bw);
+    if (pid() !== 'strength') {
+      const t = l.target || prog().reps;
+      if (!(l.reps.length && l.reps.every(r => r >= t))) return l.weight;
+    }
+    return l.weight + inc(lift);
+  }
+
+  // "Incline Press 3x12", "Pull-ups 3x10 bw", "Squat" -> lift spec
+  function parseLine(line) {
+    let name = line.trim();
+    if (!name) return null;
+    let bw = false, sets = prog().sets, reps = prog().reps;
+    const b = name.match(/\s+bw$/i);
+    if (b) { bw = true; name = name.slice(0, b.index).trim(); }
+    const m = name.match(/\s+(\d+)\s*[x×]\s*(\d+)$/i);
+    if (m) { sets = Math.min(10, Math.max(1, +m[1])); reps = Math.max(1, +m[2]); name = name.slice(0, m.index).trim(); }
+    return name ? { name, sets, target:reps, bw, extra:true } : null;
+  }
+  function dayLifts(type) {
+    if (pid() === 'strength') return [
+      ...WORKOUTS[type].map(name => ({ name, sets:SETS, target:REPS, bw:false })),
+      ...state.extras.filter(e => e.on[type]).map(e => ({ name:e.name, sets:e.sets, target:e.reps, extra:true, bw:!!e.bw })),
+    ];
+    return (state.volumeDays[type] || []).map(parseLine).filter(Boolean);
   }
   function buildDraft() {
     const type = nextType();
     return {
+      pid: pid(),
       type,
-      lifts: [
-        ...WORKOUTS[type].map(name => ({ name, sets:SETS, target:REPS })),
-        ...state.extras.filter(e => e.on[type]).map(e => ({ name:e.name, sets:e.sets, target:e.reps, extra:true })),
-      ].map(l => ({
+      lifts: dayLifts(type).map(l => ({
         ...l,
-        weight: targetWeight(l.name),
+        weight: targetWeight(l.name, l.bw),
         prev: lastWeight(l.name),
         reps: Array(l.sets).fill(null),   // null = not attempted yet
       })),
     };
   }
   function ensureDraft() {
-    // Draft is rebuilt if the workout it was based on is stale (e.g. history changed).
-    if (!state.draft || state.draft.type !== nextType() || state.draft.lifts.some(l => !l.target)) { state.draft = buildDraft(); save(); }
+    // Rebuild if the draft belongs to another program / workout, or is from an older format.
+    const d = state.draft;
+    if (!d || (d.pid || 'strength') !== pid() || d.type !== nextType() || d.lifts.some(l => !l.target)) { state.draft = buildDraft(); save(); }
   }
 
   const fmt = n => (Math.round(n * 100) / 100).toString();
@@ -196,17 +270,17 @@
   function renderWorkout() {
     ensureDraft();
     const d = state.draft;
-    const last = state.history[state.history.length - 1];
-    const intro = el(`<div class="card"><div class="row"><div class="grow"><h2>Workout ${d.type} <span class="sub">#${state.history.length + 1}</span></h2>
-      <div class="sub">${last ? `Last: ${last.type} on ${last.date} · weights increased` : 'First session · starting weights'}</div></div></div></div>`);
+    const last = hist()[hist().length - 1];
+    const intro = el(`<div class="card"><div class="row"><div class="grow"><h2>Workout ${d.type} <span class="sub">#${hist().length + 1} · ${prog().name}</span></h2>
+      <div class="sub">${last ? `Last: ${last.type} on ${last.date} · ${pid() === 'strength' ? 'weights increased' : 'weight rises when every set hits target'}` : 'First session · starting weights'}</div></div></div></div>`);
     view.append(intro);
 
     d.lifts.forEach((lift, li) => {
       const up = lift.prev !== null && lift.weight > lift.prev;
-      const c = el(`<div class="card lift"><div class="info"><h2>${lift.name}</h2>
-        <div class="sub">${lift.extra ? `${lift.sets}×${lift.target} · ` : ''}${lift.prev !== null ? `last ${fmt(lift.prev)}${up ? ` (+${fmt(lift.weight - lift.prev)})` : ''}` : 'first time'}</div>
+      const c = el(`<div class="card lift${lift.sets > 5 ? ' wide' : ''}"><div class="info"><h2>${esc(lift.name)}</h2>
+        <div class="sub">${lift.extra ? `${lift.sets}×${lift.target} · ` : ''}${lift.bw ? 'BW + ' : ''}${lift.prev !== null ? `last ${fmt(lift.prev)}${up ? ` (+${fmt(lift.weight - lift.prev)})` : ''}` : 'first time'}</div>
         <div class="weight"><button class="step" data-d="-${inc(lift.name)}">−</button>
-          <input type="number" step="0.5" min="0" value="${fmt(lift.weight)}"><span class="sub">kg</span>
+          <input type="number" step="0.5" min="0" value="${fmt(lift.weight)}"><span class="sub">${lift.bw ? '+kg' : 'kg'}</span>
           <button class="step" data-d="${inc(lift.name)}">+</button></div></div>
         <div class="sets"></div></div>`);
       const input = c.querySelector('input');
@@ -243,7 +317,8 @@
         id: Date.now(),
         date: iso(new Date()),
         type: d.type,
-        lifts: d.lifts.map(l => ({ name:l.name, weight:l.weight, target:l.target, reps:l.reps.map(r => r === null ? 0 : r) })),
+        program: pid(),
+        lifts: d.lifts.map(l => ({ name:l.name, weight:l.weight, target:l.target, bw:!!l.bw, reps:l.reps.map(r => r === null ? 0 : r) })),
       });
       state.draft = null; save(); tab = 'history'; render();
     };
@@ -291,8 +366,8 @@
     view.append(calendar());
     if (!state.history.length) return view.append(el(`<div class="empty">No workouts yet.</div>`));
     [...state.history].reverse().forEach(w => {
-      const rows = w.lifts.map(l => `<tr><td>${l.name}</td><td>${fmt(l.weight)} kg</td><td>${l.reps.join(' / ')}</td></tr>`).join('');
-      const c = el(`<div class="card" id="w-${w.id}"><div class="row"><div class="grow"><h2>Workout ${w.type}</h2><div class="sub">${w.date}</div></div>
+      const rows = w.lifts.map(l => `<tr><td>${l.name}</td><td>${l.bw ? (l.weight ? 'BW + ' + fmt(l.weight) + ' kg' : 'BW') : fmt(l.weight) + ' kg'}</td><td>${l.reps.join(' / ')}</td></tr>`).join('');
+      const c = el(`<div class="card" id="w-${w.id}"><div class="row"><div class="grow"><h2>Workout ${w.type}</h2><div class="sub">${w.date} · ${PROGRAMS[w.program || 'strength'].name}</div></div>
         <button class="ghost danger">Delete</button></div>
         <table><tr><th>Lift</th><th>Weight</th><th>Reps per set</th></tr>${rows}</table></div>`);
       c.querySelector('button').onclick = () => {
@@ -311,19 +386,20 @@
     const bar = el(`<div class="seg">${Object.keys(RANGES).map(r => `<button data-r="${r}" class="${r === range ? 'on' : ''}">${r}</button>`).join('')}</div>`);
     bar.querySelectorAll('button').forEach(b => b.onclick = () => { range = b.dataset.r; render(); });
     view.append(bar);
-    if (!state.history.length) return view.append(el(`<div class="empty">Log a workout to see progress.</div>`));
+    view.append(el(`<p class="hint" style="margin-top:0">Showing: ${prog().name}</p>`));
+    if (!hist().length) return view.append(el(`<div class="empty">Log a workout to see progress.</div>`));
 
     const end = new Date(); end.setHours(0, 0, 0, 0);
     let start;
     if (RANGES[range]) { start = new Date(end); start.setDate(start.getDate() - RANGES[range]); }
-    else start = parse(state.history[0].date);
+    else start = parse(hist()[0].date);
     const colors = ['#2563eb', '#16a34a', '#d97706', '#9333ea', '#dc2626', '#0891b2', '#be185d', '#65a30d'];
 
-    const names = [...ALL_LIFTS];
-    state.history.forEach(w => w.lifts.forEach(l => { if (!names.includes(l.name)) names.push(l.name); }));
+    const names = pid() === 'strength' ? [...ALL_LIFTS] : [];
+    hist().forEach(w => w.lifts.forEach(l => { if (!names.includes(l.name)) names.push(l.name); }));
     names.forEach((name, i) => {
       const all = [];
-      state.history.forEach(w => { const l = w.lifts.find(x => x.name === name); if (l) all.push({ date:w.date, t:parse(w.date), kg:l.weight }); });
+      hist().forEach(w => { const l = w.lifts.find(x => x.name === name); if (l) all.push({ date:w.date, t:parse(w.date), kg:l.weight }); });
       const pts = all.filter(p => p.t >= start && p.t <= end);
       if (!all.length) return;
       const latest = all[all.length - 1];
@@ -331,7 +407,7 @@
         ? chart(pts, colors[i % colors.length], start, end)
         : `<div class="empty" style="padding:10px 0">No sessions in this period</div>`;
       const change = pts.length > 1 ? pts[pts.length - 1].kg - pts[0].kg : null;
-      view.append(el(`<div class="card"><div class="row"><div class="grow"><h2>${name}</h2>
+      view.append(el(`<div class="card"><div class="row"><div class="grow"><h2>${esc(name)}</h2>
         <div class="sub">${pts.length} session${pts.length === 1 ? '' : 's'}${change !== null ? ` · ${change >= 0 ? '+' : ''}${fmt(change)} kg` : ''}</div></div>
         <div style="text-align:right"><b>${fmt(latest.kg)} kg</b><div class="sub">best ${fmt(Math.max(...all.map(p => p.kg)))}</div></div></div>${body}</div>`));
     });
@@ -362,12 +438,12 @@
 
   function extrasCard() {
     const list = state.extras.map((e, i) => `<div class="xrow" data-i="${i}">
-        <div class="grow"><b>${esc(e.name)}</b><div class="sub">${e.sets}×${e.reps} · start ${fmt(e.start)} kg · +${fmt(e.inc)} kg/session</div></div>
+        <div class="grow"><b>${esc(e.name)}</b><div class="sub">${e.sets}×${e.reps} · ${e.bw ? 'bodyweight, start +' : 'start '}${fmt(e.start)} kg · +${fmt(e.inc)} kg/session</div></div>
         <label class="chk"><input type="checkbox" data-w="A" ${e.on.A ? 'checked' : ''}>A</label>
         <label class="chk"><input type="checkbox" data-w="B" ${e.on.B ? 'checked' : ''}>B</label>
         <button class="ghost danger" data-del>✕</button></div>`).join('');
     const c = el(`<div class="card setup"><h2>Extra exercises</h2>
-      <p class="hint">Optional add-ons for each workout. Tick A and/or B to choose where they appear. Weights go up by the amount you set each session (use 0 for bodyweight).</p>
+      <p class="hint">Optional add-ons for each workout. Tick A and/or B to choose where they appear. Weights go up by the amount you set each session. Tick Bodyweight for moves like pull-ups: the weight is then <i>added</i> weight on top of your body (start at 0).</p>
       ${list || '<div class="sub" style="padding:4px 0 8px">None yet.</div>'}
       <div class="xadd">
         <input id="xn" type="text" placeholder="Exercise name (e.g. Pull-ups)" maxlength="40">
@@ -379,6 +455,7 @@
         </div>
         <div class="row"><label class="chk"><input id="xa" type="checkbox" checked>Workout A</label>
           <label class="chk"><input id="xb" type="checkbox" checked>Workout B</label>
+          <label class="chk"><input id="xbw" type="checkbox">Bodyweight</label>
           <span class="grow"></span><button class="ghost" id="xadd">Add</button></div>
       </div></div>`);
     c.querySelectorAll('.xrow').forEach(r => {
@@ -397,14 +474,40 @@
       if (taken) return alert('That exercise already exists.');
       const on = { A:c.querySelector('#xa').checked, B:c.querySelector('#xb').checked };
       if (!on.A && !on.B) return alert('Pick workout A, B or both.');
-      state.extras.push({ name, sets:num('#xs', 1, 5, 3), reps:num('#xr', 1, 99, 10), start:num('#xw', 0, 1000, 0), inc:num('#xi', 0, 100, 0), on });
+      state.extras.push({ name, sets:num('#xs', 1, 5, 3), reps:num('#xr', 1, 99, 10), start:num('#xw', 0, 1000, 0), inc:num('#xi', 0, 100, 0), bw:c.querySelector('#xbw').checked, on });
       state.draft = null; save(); render();
     };
     return c;
   }
 
+  function programCard() {
+    const c = el(`<div class="card"><h2>Program</h2>
+      <p class="hint">Switch between your strength program and the volume program. Each keeps its own history and weights. Your data is never deleted when you switch.</p>
+      <div class="seg" style="margin:0">${Object.keys(PROGRAMS).map(k => `<button data-p="${k}" class="${k === pid() ? 'on' : ''}">${PROGRAMS[k].name}</button>`).join('')}</div></div>`);
+    c.querySelectorAll('[data-p]').forEach(b => b.onclick = () => {
+      if (b.dataset.p === pid()) return;
+      if (state.draft && state.draft.lifts.some(l => l.reps.some(r => r !== null)) && !confirm('Switch program? Your unfinished workout will be discarded.')) return;
+      state.program = b.dataset.p; state.draft = null; save(); render();
+    });
+    return c;
+  }
+
+  function volumeCard() {
+    const days = Object.keys(state.volumeDays).sort();
+    const c = el(`<div class="card setup"><h2>Volume plan</h2>
+      <p class="hint">One exercise per line. A plain name uses the program's ${prog().sets}×${prog().reps}. Add <b>3x12</b> after a name for a different scheme (max 10 sets), and <b>bw</b> at the end for bodyweight moves, e.g. <i>Pull-ups 3x10 bw</i>. Shared by both volume programs. Weight goes up ${DEFAULT_INC} kg only once every set hits its target reps.</p>
+      ${days.map(d => `<div class="vd"><div class="sub">Workout ${d}</div><textarea rows="${Math.max(3, state.volumeDays[d].length + 1)}" data-d="${d}" spellcheck="false">${esc(state.volumeDays[d].join('\n'))}</textarea></div>`).join('')}
+      <button class="ghost" id="vsave">Save plan</button></div>`);
+    c.querySelector('#vsave').onclick = () => {
+      c.querySelectorAll('textarea').forEach(t => { state.volumeDays[t.dataset.d] = t.value.split('\n').map(x => x.trim()).filter(Boolean); });
+      state.draft = null; save(); alert('Saved'); render();
+    };
+    return c;
+  }
+
   function renderSettings() {
-    view.append(extrasCard());
+    view.append(programCard());
+    view.append(pid() === 'strength' ? extrasCard() : volumeCard());
     const c = el(`<div class="card"><h2>Data</h2>
       <p class="hint">Your data is stored in this browser only. Export a backup now and then.</p>
       <div class="row" style="flex-wrap:wrap">
@@ -424,7 +527,7 @@
         const s = JSON.parse(await file.files[0].text());
         if (!s.history || !s.start) throw new Error('Not a tracker backup');
         if (!confirm('Replace current data with this backup?')) return;
-        state = s; save(); render();
+        state = normalize(s); save(); render();
       } catch (e) { alert('Import failed: ' + e.message); }
     };
     view.append(c);
