@@ -65,6 +65,15 @@
   .seg { display:flex; gap:4px; margin-bottom:7px; }
   .seg button { flex:1; padding:6px 0; border:1px solid var(--line); background:var(--card); color:var(--text); border-radius:8px; font-size:.8rem; cursor:pointer; }
   .seg button.on { background:var(--accent); border-color:var(--accent); color:#fff; }
+  .xrow { display:flex; align-items:center; gap:8px; padding:6px 0; border-bottom:1px solid var(--line); }
+  .setup .chk, .setup .xnums label { padding:0; justify-content:flex-start; }
+  .chk { display:flex; align-items:center; gap:3px; font-size:.8rem; }
+  .chk input { width:auto; margin:0; }
+  .xadd { padding-top:8px; }
+  .xadd > input { width:100%; padding:7px 9px; font-size:.95rem; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--text); }
+  .xnums { display:grid; grid-template-columns:repeat(4,1fr); gap:6px; margin:6px 0; }
+  .xnums label { display:block; font-size:.7rem; color:var(--muted); }
+  .xnums input { width:100%; padding:6px; font-size:.9rem; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--text); }
   .hint { color:var(--muted); font-size:.72rem; margin:2px 0 8px; }
   .empty { color:var(--muted); text-align:center; padding:24px 0; }
 </style>
@@ -90,7 +99,8 @@
 
   const INCREMENTS = { 'Deadlift':5 };   // kg added each workout (default below)
   const DEFAULT_INC = 2.5;
-  const inc = lift => INCREMENTS[lift] || DEFAULT_INC;
+  const extraOf = name => (state.extras || []).find(e => e.name === name);
+  const inc = lift => { const e = extraOf(lift); return e ? e.inc : (INCREMENTS[lift] || DEFAULT_INC); };
   const SETS = 5, REPS = 5;
   const WORKOUTS = {
     A: ['Squat', 'Bench Press', 'Barbell Row'],
@@ -108,9 +118,9 @@
   function load() {
     try {
       const s = JSON.parse(localStorage.getItem(KEY));
-      if (s && s.history) return s;
+      if (s && s.history) { s.extras = s.extras || []; return s; }
     } catch (e) {}
-    return { started:false, start:{...DEFAULT_START}, history:[], draft:null };
+    return { started:false, start:{...DEFAULT_START}, history:[], draft:null, extras:[] };
   }
   function save() {
     try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) { alert('Could not save: ' + e.message); }
@@ -133,23 +143,28 @@
   // Weight to use next: last logged weight + 2.5, or the starting weight on first ever use.
   function targetWeight(lift) {
     const w = lastWeight(lift);
-    return w === null ? Number(state.start[lift]) : w + inc(lift);
+    if (w !== null) return w + inc(lift);
+    const e = extraOf(lift);
+    return e ? e.start : Number(state.start[lift]);
   }
   function buildDraft() {
     const type = nextType();
     return {
       type,
-      lifts: WORKOUTS[type].map(name => ({
-        name,
-        weight: targetWeight(name),
-        prev: lastWeight(name),
-        reps: Array(SETS).fill(null),   // null = not attempted yet
+      lifts: [
+        ...WORKOUTS[type].map(name => ({ name, sets:SETS, target:REPS })),
+        ...state.extras.filter(e => e.on[type]).map(e => ({ name:e.name, sets:e.sets, target:e.reps, extra:true })),
+      ].map(l => ({
+        ...l,
+        weight: targetWeight(l.name),
+        prev: lastWeight(l.name),
+        reps: Array(l.sets).fill(null),   // null = not attempted yet
       })),
     };
   }
   function ensureDraft() {
     // Draft is rebuilt if the workout it was based on is stale (e.g. history changed).
-    if (!state.draft || state.draft.type !== nextType()) { state.draft = buildDraft(); save(); }
+    if (!state.draft || state.draft.type !== nextType() || state.draft.lifts.some(l => !l.target)) { state.draft = buildDraft(); save(); }
   }
 
   const fmt = n => (Math.round(n * 100) / 100).toString();
@@ -189,7 +204,7 @@
     d.lifts.forEach((lift, li) => {
       const up = lift.prev !== null && lift.weight > lift.prev;
       const c = el(`<div class="card lift"><div class="info"><h2>${lift.name}</h2>
-        <div class="sub">${lift.prev !== null ? `last ${fmt(lift.prev)}${up ? ` (+${fmt(lift.weight - lift.prev)})` : ''}` : 'first time'}</div>
+        <div class="sub">${lift.extra ? `${lift.sets}×${lift.target} · ` : ''}${lift.prev !== null ? `last ${fmt(lift.prev)}${up ? ` (+${fmt(lift.weight - lift.prev)})` : ''}` : 'first time'}</div>
         <div class="weight"><button class="step" data-d="-${inc(lift.name)}">−</button>
           <input type="number" step="0.5" min="0" value="${fmt(lift.weight)}"><span class="sub">kg</span>
           <button class="step" data-d="${inc(lift.name)}">+</button></div></div>
@@ -205,13 +220,13 @@
         const paint = () => {
           const v = lift.reps[si];
           b.textContent = v === null ? '' : v;
-          b.className = 'set' + (v === null ? '' : v >= REPS ? ' done' : v === 0 ? ' miss' : ' part');
+          b.className = 'set' + (v === null ? '' : v >= lift.target ? ' done' : v === 0 ? ' miss' : ' part');
         };
         paint();
         // Tap cycle: blank → 5 → 4 → 3 → 2 → 1 → 0 → blank
         b.onclick = () => {
           const v = lift.reps[si];
-          lift.reps[si] = v === null ? REPS : v === 0 ? null : v - 1;
+          lift.reps[si] = v === null ? lift.target : v === 0 ? null : v - 1;
           paint(); save();
         };
         sets.append(b);
@@ -219,7 +234,7 @@
       view.append(c);
     });
 
-    view.append(el(`<p class="hint">Tap a set for 5 reps; tap again to lower the count if you missed reps.</p>`));
+    view.append(el(`<p class="hint">Tap a set to log the target reps; tap again to lower the count if you missed reps.</p>`));
     const fin = el(`<button class="primary">Finish workout</button>`);
     fin.onclick = () => {
       const anyDone = d.lifts.some(l => l.reps.some(r => r !== null));
@@ -228,7 +243,7 @@
         id: Date.now(),
         date: iso(new Date()),
         type: d.type,
-        lifts: d.lifts.map(l => ({ name:l.name, weight:l.weight, reps:l.reps.map(r => r === null ? 0 : r) })),
+        lifts: d.lifts.map(l => ({ name:l.name, weight:l.weight, target:l.target, reps:l.reps.map(r => r === null ? 0 : r) })),
       });
       state.draft = null; save(); tab = 'history'; render();
     };
@@ -302,16 +317,18 @@
     let start;
     if (RANGES[range]) { start = new Date(end); start.setDate(start.getDate() - RANGES[range]); }
     else start = parse(state.history[0].date);
-    const colors = ['#2563eb', '#16a34a', '#d97706', '#9333ea', '#dc2626'];
+    const colors = ['#2563eb', '#16a34a', '#d97706', '#9333ea', '#dc2626', '#0891b2', '#be185d', '#65a30d'];
 
-    ALL_LIFTS.forEach((name, i) => {
+    const names = [...ALL_LIFTS];
+    state.history.forEach(w => w.lifts.forEach(l => { if (!names.includes(l.name)) names.push(l.name); }));
+    names.forEach((name, i) => {
       const all = [];
       state.history.forEach(w => { const l = w.lifts.find(x => x.name === name); if (l) all.push({ date:w.date, t:parse(w.date), kg:l.weight }); });
       const pts = all.filter(p => p.t >= start && p.t <= end);
       if (!all.length) return;
       const latest = all[all.length - 1];
       const body = pts.length
-        ? chart(pts, colors[i], start, end)
+        ? chart(pts, colors[i % colors.length], start, end)
         : `<div class="empty" style="padding:10px 0">No sessions in this period</div>`;
       const change = pts.length > 1 ? pts[pts.length - 1].kg - pts[0].kg : null;
       view.append(el(`<div class="card"><div class="row"><div class="grow"><h2>${name}</h2>
@@ -341,7 +358,53 @@
       <path d="${path}" fill="none" stroke="${color}" stroke-width="2"/>${dots}</svg>`;
   }
 
+  function esc(t) { return String(t).replace(/[&<>"']/g, ch => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[ch])); }
+
+  function extrasCard() {
+    const list = state.extras.map((e, i) => `<div class="xrow" data-i="${i}">
+        <div class="grow"><b>${esc(e.name)}</b><div class="sub">${e.sets}×${e.reps} · start ${fmt(e.start)} kg · +${fmt(e.inc)} kg/session</div></div>
+        <label class="chk"><input type="checkbox" data-w="A" ${e.on.A ? 'checked' : ''}>A</label>
+        <label class="chk"><input type="checkbox" data-w="B" ${e.on.B ? 'checked' : ''}>B</label>
+        <button class="ghost danger" data-del>✕</button></div>`).join('');
+    const c = el(`<div class="card setup"><h2>Extra exercises</h2>
+      <p class="hint">Optional add-ons for each workout. Tick A and/or B to choose where they appear. Weights go up by the amount you set each session (use 0 for bodyweight).</p>
+      ${list || '<div class="sub" style="padding:4px 0 8px">None yet.</div>'}
+      <div class="xadd">
+        <input id="xn" type="text" placeholder="Exercise name (e.g. Pull-ups)" maxlength="40">
+        <div class="xnums">
+          <label>Sets<input id="xs" type="number" min="1" max="5" value="3"></label>
+          <label>Reps<input id="xr" type="number" min="1" max="99" value="10"></label>
+          <label>Start kg<input id="xw" type="number" min="0" step="0.5" value="0"></label>
+          <label>+kg<input id="xi" type="number" min="0" step="0.5" value="2.5"></label>
+        </div>
+        <div class="row"><label class="chk"><input id="xa" type="checkbox" checked>Workout A</label>
+          <label class="chk"><input id="xb" type="checkbox" checked>Workout B</label>
+          <span class="grow"></span><button class="ghost" id="xadd">Add</button></div>
+      </div></div>`);
+    c.querySelectorAll('.xrow').forEach(r => {
+      const e = state.extras[Number(r.dataset.i)];
+      r.querySelectorAll('input[data-w]').forEach(cb => cb.onchange = () => { e.on[cb.dataset.w] = cb.checked; state.draft = null; save(); });
+      r.querySelector('[data-del]').onclick = () => {
+        if (!confirm(`Remove ${e.name} from your workouts? Past logs are kept.`)) return;
+        state.extras.splice(Number(r.dataset.i), 1); state.draft = null; save(); render();
+      };
+    });
+    c.querySelector('#xadd').onclick = () => {
+      const name = c.querySelector('#xn').value.trim();
+      const num = (id, lo, hi, d) => Math.min(hi, Math.max(lo, Number(c.querySelector(id).value) || d));
+      if (!name) return alert('Enter an exercise name.');
+      const taken = [...ALL_LIFTS, ...state.extras.map(e => e.name)].some(n => n.toLowerCase() === name.toLowerCase());
+      if (taken) return alert('That exercise already exists.');
+      const on = { A:c.querySelector('#xa').checked, B:c.querySelector('#xb').checked };
+      if (!on.A && !on.B) return alert('Pick workout A, B or both.');
+      state.extras.push({ name, sets:num('#xs', 1, 5, 3), reps:num('#xr', 1, 99, 10), start:num('#xw', 0, 1000, 0), inc:num('#xi', 0, 100, 0), on });
+      state.draft = null; save(); render();
+    };
+    return c;
+  }
+
   function renderSettings() {
+    view.append(extrasCard());
     const c = el(`<div class="card"><h2>Data</h2>
       <p class="hint">Your data is stored in this browser only. Export a backup now and then.</p>
       <div class="row" style="flex-wrap:wrap">
