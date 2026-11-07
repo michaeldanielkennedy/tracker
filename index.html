@@ -1,0 +1,313 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>5x5 Tracker</title>
+<meta name="theme-color" content="#2563eb">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="5x5">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="icon" type="image/png" href="icons/icon-192.png">
+<style>
+  :root {
+    --bg:#f5f6f8; --card:#fff; --text:#1c1e21; --muted:#6b7280; --line:#e3e5e9;
+    --accent:#2563eb; --ok:#16a34a; --warn:#d97706; --bad:#dc2626;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#111317; --card:#1b1e24; --text:#eceef1; --muted:#9aa1ac; --line:#2c313a; --accent:#5b8cff; }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:16px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; }
+  main { max-width:560px; margin:0 auto; padding:16px; padding-top:max(16px, env(safe-area-inset-top)); padding-bottom:max(16px, env(safe-area-inset-bottom)); }
+  h1 { font-size:1.3rem; margin:0; }
+  header { display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; }
+  nav { display:flex; gap:6px; margin-bottom:16px; }
+  nav button { flex:1; padding:10px; border:1px solid var(--line); background:var(--card); color:var(--text); border-radius:8px; font-size:.95rem; cursor:pointer; }
+  nav button.on { background:var(--accent); color:#fff; border-color:var(--accent); }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:14px; margin-bottom:12px; }
+  .card h2 { margin:0 0 2px; font-size:1.05rem; }
+  .sub { color:var(--muted); font-size:.85rem; }
+  .row { display:flex; align-items:center; gap:10px; }
+  .grow { flex:1; }
+  .weight { display:flex; align-items:center; gap:6px; margin:8px 0 10px; }
+  .weight input { width:90px; font-size:1.2rem; padding:6px 8px; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--text); }
+  .weight .step { width:36px; height:36px; border-radius:8px; border:1px solid var(--line); background:var(--bg); color:var(--text); font-size:1.1rem; cursor:pointer; }
+  .tag { font-size:.75rem; padding:2px 8px; border-radius:99px; background:var(--bg); border:1px solid var(--line); color:var(--muted); }
+  .tag.up { color:var(--ok); border-color:var(--ok); }
+  .sets { display:grid; grid-template-columns:repeat(5,1fr); gap:8px; }
+  .set { aspect-ratio:1; border-radius:50%; border:2px solid var(--line); background:var(--bg); color:var(--muted); font-size:1.3rem; font-weight:600; cursor:pointer; user-select:none; }
+  .set.done { background:var(--ok); border-color:var(--ok); color:#fff; }
+  .set.part { background:var(--warn); border-color:var(--warn); color:#fff; }
+  .set.miss { background:var(--bad); border-color:var(--bad); color:#fff; }
+  .primary { width:100%; padding:14px; border:0; border-radius:10px; background:var(--accent); color:#fff; font-size:1rem; font-weight:600; cursor:pointer; }
+  .ghost { padding:8px 12px; border:1px solid var(--line); background:var(--card); color:var(--text); border-radius:8px; cursor:pointer; font-size:.85rem; }
+  .danger { color:var(--bad); }
+  table { width:100%; border-collapse:collapse; font-size:.9rem; }
+  td,th { text-align:left; padding:5px 4px; border-bottom:1px solid var(--line); }
+  th { color:var(--muted); font-weight:500; font-size:.8rem; }
+  select { padding:8px; border-radius:8px; border:1px solid var(--line); background:var(--card); color:var(--text); font-size:1rem; }
+  .setup label { display:flex; justify-content:space-between; align-items:center; padding:6px 0; }
+  .setup input { width:100px; padding:6px 8px; font-size:1rem; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--text); }
+  svg { width:100%; height:auto; display:block; }
+  .hint { color:var(--muted); font-size:.8rem; margin:6px 0 12px; }
+  .empty { color:var(--muted); text-align:center; padding:24px 0; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>5×5 Tracker</h1>
+    <span class="sub" id="today"></span>
+  </header>
+  <nav>
+    <button data-tab="workout" class="on">Workout</button>
+    <button data-tab="history">History</button>
+    <button data-tab="progress">Progress</button>
+    <button data-tab="settings">Settings</button>
+  </nav>
+  <div id="view"></div>
+</main>
+
+<script>
+(() => {
+  'use strict';
+
+  const INCREMENT = 2.5;       // kg added each workout
+  const SETS = 5, REPS = 5;
+  const WORKOUTS = {
+    A: ['Squat', 'Bench Press', 'Barbell Row'],
+    B: ['Squat', 'Overhead Press', 'Deadlift'],
+  };
+  const ALL_LIFTS = ['Squat', 'Bench Press', 'Barbell Row', 'Overhead Press', 'Deadlift'];
+  const DEFAULT_START = { 'Squat':20, 'Bench Press':20, 'Barbell Row':30, 'Overhead Press':20, 'Deadlift':40 };
+  const KEY = 'fivebyfive.v1';
+
+  // ---------- state ----------
+  // { started:bool, start:{lift:kg}, history:[{id,date,type,lifts:[{name,weight,reps:[5,5,5,5,5]}]}], draft:{type,lifts:[...]}|null }
+  let state = load();
+  let tab = 'workout';
+
+  function load() {
+    try {
+      const s = JSON.parse(localStorage.getItem(KEY));
+      if (s && s.history) return s;
+    } catch (e) {}
+    return { started:false, start:{...DEFAULT_START}, history:[], draft:null };
+  }
+  function save() {
+    try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) { alert('Could not save: ' + e.message); }
+  }
+
+  // ---------- logic ----------
+  function nextType() {
+    const last = state.history[state.history.length - 1];
+    if (!last) return 'A';
+    return last.type === 'A' ? 'B' : 'A';
+  }
+  // Last completed weight for a lift (any workout), or null.
+  function lastWeight(lift) {
+    for (let i = state.history.length - 1; i >= 0; i--) {
+      const l = state.history[i].lifts.find(x => x.name === lift);
+      if (l) return l.weight;
+    }
+    return null;
+  }
+  // Weight to use next: last logged weight + 2.5, or the starting weight on first ever use.
+  function targetWeight(lift) {
+    const w = lastWeight(lift);
+    return w === null ? Number(state.start[lift]) : w + INCREMENT;
+  }
+  function buildDraft() {
+    const type = nextType();
+    return {
+      type,
+      lifts: WORKOUTS[type].map(name => ({
+        name,
+        weight: targetWeight(name),
+        prev: lastWeight(name),
+        reps: Array(SETS).fill(null),   // null = not attempted yet
+      })),
+    };
+  }
+  function ensureDraft() {
+    // Draft is rebuilt if the workout it was based on is stale (e.g. history changed).
+    if (!state.draft || state.draft.type !== nextType()) { state.draft = buildDraft(); save(); }
+  }
+
+  const fmt = n => (Math.round(n * 100) / 100).toString();
+  const el = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstChild; };
+
+  // ---------- views ----------
+  const view = document.getElementById('view');
+  document.getElementById('today').textContent = new Date().toLocaleDateString(undefined, { weekday:'short', day:'numeric', month:'short' });
+
+  function render() {
+    document.querySelectorAll('nav button').forEach(b => b.classList.toggle('on', b.dataset.tab === tab));
+    view.innerHTML = '';
+    if (!state.started) return renderSetup();
+    ({ workout:renderWorkout, history:renderHistory, progress:renderProgress, settings:renderSettings })[tab]();
+  }
+
+  function renderSetup() {
+    const rows = ALL_LIFTS.map(l => `<label>${l}<span><input type="number" step="2.5" min="0" data-l="${l}" value="${state.start[l]}"> kg</span></label>`).join('');
+    const c = el(`<div class="card setup"><h2>Starting weights</h2>
+      <p class="hint">Enter the weight you'll use for your <b>first</b> workout. After that each lift goes up ${INCREMENT} kg every time you open the app for the next session. Start light (empty bar is 20 kg).</p>
+      ${rows}<div style="height:10px"></div><button class="primary" id="go">Start program</button></div>`);
+    c.querySelector('#go').onclick = () => {
+      c.querySelectorAll('input').forEach(i => { state.start[i.dataset.l] = Number(i.value) || 0; });
+      state.started = true; state.draft = null; save(); render();
+    };
+    view.append(c);
+  }
+
+  function renderWorkout() {
+    ensureDraft();
+    const d = state.draft;
+    const last = state.history[state.history.length - 1];
+    const intro = el(`<div class="card"><div class="row"><div class="grow"><h2>Workout ${d.type}</h2>
+      <div class="sub">${d.lifts.map(l => l.name).join(' · ')}</div></div>
+      <span class="tag">#${state.history.length + 1}</span></div>
+      <div class="sub" style="margin-top:6px">${last ? `Last session: Workout ${last.type} on ${last.date}. +${INCREMENT} kg applied.` : 'First session — using your starting weights.'}</div></div>`);
+    view.append(intro);
+
+    d.lifts.forEach((lift, li) => {
+      const up = lift.prev !== null && lift.weight > lift.prev;
+      const c = el(`<div class="card"><div class="row"><div class="grow"><h2>${lift.name}</h2>
+        <div class="sub">${SETS}×${REPS}${lift.prev !== null ? ` · last ${fmt(lift.prev)} kg` : ''}</div></div>
+        ${up ? `<span class="tag up">+${fmt(lift.weight - lift.prev)} kg</span>` : ''}</div>
+        <div class="weight"><button class="step" data-d="-2.5">−</button>
+          <input type="number" step="0.5" min="0" value="${fmt(lift.weight)}"><span>kg</span>
+          <button class="step" data-d="2.5">+</button></div>
+        <div class="sets"></div></div>`);
+      const input = c.querySelector('input');
+      input.onchange = () => { lift.weight = Math.max(0, Number(input.value) || 0); save(); };
+      c.querySelectorAll('.step').forEach(b => b.onclick = () => {
+        lift.weight = Math.max(0, lift.weight + Number(b.dataset.d)); input.value = fmt(lift.weight); save();
+      });
+      const sets = c.querySelector('.sets');
+      lift.reps.forEach((r, si) => {
+        const b = document.createElement('button');
+        const paint = () => {
+          const v = lift.reps[si];
+          b.textContent = v === null ? '' : v;
+          b.className = 'set' + (v === null ? '' : v >= REPS ? ' done' : v === 0 ? ' miss' : ' part');
+        };
+        paint();
+        // Tap cycle: blank → 5 → 4 → 3 → 2 → 1 → 0 → blank
+        b.onclick = () => {
+          const v = lift.reps[si];
+          lift.reps[si] = v === null ? REPS : v === 0 ? null : v - 1;
+          paint(); save();
+        };
+        sets.append(b);
+      });
+      view.append(c);
+    });
+
+    view.append(el(`<p class="hint">Tap a circle once for a completed 5 reps. Tap again to drop the count if you missed reps (4, 3, …, 0). Adjust a weight with −/+ if needed.</p>`));
+    const fin = el(`<button class="primary">Finish workout</button>`);
+    fin.onclick = () => {
+      const anyDone = d.lifts.some(l => l.reps.some(r => r !== null));
+      if (!anyDone && !confirm('No sets logged. Finish anyway?')) return;
+      state.history.push({
+        id: Date.now(),
+        date: new Date().toISOString().slice(0, 10),
+        type: d.type,
+        lifts: d.lifts.map(l => ({ name:l.name, weight:l.weight, reps:l.reps.map(r => r === null ? 0 : r) })),
+      });
+      state.draft = null; save(); tab = 'history'; render();
+    };
+    view.append(fin);
+  }
+
+  function renderHistory() {
+    if (!state.history.length) return view.append(el(`<div class="empty">No workouts yet.</div>`));
+    [...state.history].reverse().forEach(w => {
+      const rows = w.lifts.map(l => `<tr><td>${l.name}</td><td>${fmt(l.weight)} kg</td><td>${l.reps.join(' / ')}</td></tr>`).join('');
+      const c = el(`<div class="card"><div class="row"><div class="grow"><h2>Workout ${w.type}</h2><div class="sub">${w.date}</div></div>
+        <button class="ghost danger">Delete</button></div>
+        <table><tr><th>Lift</th><th>Weight</th><th>Reps per set</th></tr>${rows}</table></div>`);
+      c.querySelector('button').onclick = () => {
+        if (!confirm('Delete this workout? Next weights will be recalculated.')) return;
+        state.history = state.history.filter(x => x.id !== w.id); state.draft = null; save(); render();
+      };
+      view.append(c);
+    });
+  }
+
+  function renderProgress() {
+    if (!state.history.length) return view.append(el(`<div class="empty">Log a workout to see progress.</div>`));
+    const colors = ['#2563eb', '#16a34a', '#d97706', '#9333ea', '#dc2626'];
+    ALL_LIFTS.forEach((name, i) => {
+      const pts = [];
+      state.history.forEach((w, idx) => { const l = w.lifts.find(x => x.name === name); if (l) pts.push({ idx, date:w.date, kg:l.weight }); });
+      if (!pts.length) return;
+      const best = Math.max(...pts.map(p => p.kg));
+      const c = el(`<div class="card"><div class="row"><div class="grow"><h2>${name}</h2><div class="sub">${pts.length} sessions</div></div>
+        <div style="text-align:right"><b>${fmt(pts[pts.length - 1].kg)} kg</b><div class="sub">best ${fmt(best)}</div></div></div>${chart(pts, colors[i])}</div>`);
+      view.append(c);
+    });
+  }
+
+  function chart(pts, color) {
+    const W = 320, H = 110, P = 8;
+    const ys = pts.map(p => p.kg), min = Math.min(...ys), max = Math.max(...ys);
+    const span = max - min || 1;
+    const x = i => pts.length === 1 ? W / 2 : P + i * (W - 2 * P) / (pts.length - 1);
+    const y = v => H - P - (v - min) / span * (H - 2 * P);
+    const path = pts.map((p, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(p.kg).toFixed(1)}`).join(' ');
+    const dots = pts.map((p, i) => `<circle cx="${x(i).toFixed(1)}" cy="${y(p.kg).toFixed(1)}" r="3.5" fill="${color}"><title>${p.date}: ${fmt(p.kg)} kg</title></circle>`).join('');
+    return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Weight over time"><path d="${path}" fill="none" stroke="${color}" stroke-width="2"/>${dots}</svg>`;
+  }
+
+  function renderSettings() {
+    const c = el(`<div class="card"><h2>Data</h2>
+      <p class="hint">Your data is stored in this browser only. Export a backup now and then.</p>
+      <div class="row" style="flex-wrap:wrap">
+        <button class="ghost" id="exp">Export backup</button>
+        <button class="ghost" id="imp">Import backup</button>
+        <input type="file" id="file" accept="application/json" hidden>
+      </div></div>`);
+    c.querySelector('#exp').onclick = () => {
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(new Blob([JSON.stringify(state, null, 2)], { type:'application/json' }));
+      a.download = `5x5-backup-${new Date().toISOString().slice(0, 10)}.json`; a.click();
+    };
+    const file = c.querySelector('#file');
+    c.querySelector('#imp').onclick = () => file.click();
+    file.onchange = async () => {
+      try {
+        const s = JSON.parse(await file.files[0].text());
+        if (!s.history || !s.start) throw new Error('Not a 5x5 backup');
+        if (!confirm('Replace current data with this backup?')) return;
+        state = s; save(); render();
+      } catch (e) { alert('Import failed: ' + e.message); }
+    };
+    view.append(c);
+
+    const s = el(`<div class="card setup"><h2>Starting weights</h2>
+      <p class="hint">Only used for a lift that has no history yet.</p>
+      ${ALL_LIFTS.map(l => `<label>${l}<span><input type="number" step="2.5" min="0" data-l="${l}" value="${state.start[l]}"> kg</span></label>`).join('')}
+      <button class="ghost" id="sv" style="margin-top:8px">Save</button></div>`);
+    s.querySelector('#sv').onclick = () => {
+      s.querySelectorAll('input').forEach(i => { state.start[i.dataset.l] = Number(i.value) || 0; });
+      state.draft = null; save(); alert('Saved'); render();
+    };
+    view.append(s);
+  }
+
+  document.querySelectorAll('nav button').forEach(b => b.onclick = () => { tab = b.dataset.tab; render(); });
+  render();
+
+  // Offline support (needs https:// or localhost; silently skipped on file://)
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
+  }
+})();
+</script>
+</body>
+</html>
