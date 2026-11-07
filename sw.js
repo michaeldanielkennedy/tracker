@@ -1,6 +1,6 @@
 // Offline support: cache the app shell; network-first with cache fallback.
 // Bump CACHE when you change any cached file so phones pick up the update.
-const CACHE = 'tracker-v9';
+const CACHE = 'tracker-v12';
 const ASSETS = [
   './',
   './index.html',

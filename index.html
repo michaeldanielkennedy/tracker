@@ -59,9 +59,9 @@
   .cal b { font-size:.7rem; color:var(--muted); font-weight:500; }
   .day { height:30px; border:0; border-radius:8px; background:transparent; color:var(--muted); font-size:.8rem; padding:0; }
   .day.today { box-shadow:inset 0 0 0 1.5px var(--accent); }
-  .day.tw { color:#fff; font-weight:700; cursor:pointer; }
+  .day.tw { color:#1c1e21; font-weight:700; cursor:pointer; width:30px; margin:0 auto; border:3px solid; border-radius:50%; }
   .legend { display:flex; flex-wrap:wrap; gap:4px 10px; margin-top:8px; font-size:.7rem; color:var(--muted); }
-  .legend i { display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:4px; vertical-align:middle; }
+  .legend i { display:inline-block; width:13px; height:13px; border:2.5px solid; border-radius:50%; margin-right:4px; vertical-align:middle; box-sizing:border-box; }
   .seg { display:flex; gap:4px; margin-bottom:7px; }
   .seg button { flex:1; padding:6px 0; border:1px solid var(--line); background:var(--card); color:var(--text); border-radius:8px; font-size:.8rem; cursor:pointer; }
   .seg button.on { background:var(--accent); border-color:var(--accent); color:#fff; }
@@ -79,6 +79,11 @@
   .lift.wide { flex-wrap:wrap; }
   .lift.wide .sets { flex:0 0 100%; display:grid; grid-template-columns:repeat(5,1fr); gap:5px; margin-top:6px; }
   .lift.wide .set { width:100%; border-radius:10px; }
+  .modal { position:fixed; inset:0; background:rgba(0,0,0,.5); display:flex; align-items:center; justify-content:center; padding:16px; z-index:10; }
+  .modal .box { background:var(--card); color:var(--text); border-radius:14px; padding:16px; width:100%; max-width:380px; }
+  .dl { display:flex; gap:8px; align-items:center; padding:6px 0; font-size:.95rem; }
+  .dl input { width:18px; height:18px; }
+  .set.pre { opacity:.5; }
   .hint { color:var(--muted); font-size:.72rem; margin:2px 0 8px; }
   .empty { color:var(--muted); text-align:center; padding:24px 0; }
 </style>
@@ -136,6 +141,7 @@
 
   function normalize(s) {
     s.extras = s.extras || [];
+    s.twenty = s.twenty || { mode:'off', count:3, reps:20 };
     s.program = PROGRAMS[s.program] ? s.program : 'strength';
     s.volumeDays = s.volumeDays || JSON.parse(JSON.stringify(DEFAULT_VOLUME_DAYS));
     return s;
@@ -173,6 +179,35 @@
   }
   const lastWeight = lift => { const l = lastLift(lift); return l ? l.weight : null; };
 
+  // Per-set target reps (a lift may have a mix, e.g. 20 20 20 5 5). Older records have a single `target`.
+  const tgt = (l, i) => (l.targets && l.targets[i] != null) ? l.targets[i] : (l.target || 5);
+  const mixedTargets = l => !!(l.targets && l.targets.some(t => t !== l.targets[0]));
+  // Strength main lifts only: replace the first/last N sets with higher-rep sets.
+  function twentyTargets() {
+    const t = state.twenty || {};
+    if (t.mode !== 'start' && t.mode !== 'end') return null;
+    const n = Math.min(SETS - 1, Math.max(1, Number(t.count) || 1)), r = Math.max(1, Number(t.reps) || 20);
+    const arr = Array(SETS).fill(REPS);
+    for (let i = 0; i < n; i++) arr[t.mode === 'start' ? i : SETS - 1 - i] = r;
+    return arr;
+  }
+
+  // ---- deload: missed target reps on a lift in the last 2 sessions in a row ----
+  const missed = l => l.reps.some((r, i) => r < tgt(l, i));
+  const performed = l => l.reps.some(r => r > 0);          // all-zero = skipped, ignored
+  function stalledDeload(lift) {
+    const h = hist(), recs = [];
+    for (let i = h.length - 1; i >= 0 && recs.length < 2; i--) {
+      const l = h[i].lifts.find(x => x.name === lift);
+      if (l && performed(l)) recs.push(l);
+    }
+    if (recs.length < 2 || !recs.every(missed)) return null;
+    if (recs[0].deloaded || recs[0].weight <= 0) return null;   // streak restarts at a deload session
+    let w = Math.round(recs[0].weight * 0.9 / 2.5) * 2.5;
+    if (w >= recs[0].weight) w = recs[0].weight - 2.5;
+    return Math.max(0, w);
+  }
+
   // First-ever weight for a lift in the current program.
   function startWeight(lift, bw) {
     if (bw) return 0;
@@ -196,8 +231,7 @@
     const l = lastLift(lift);
     if (!l) return startWeight(lift, bw);
     if (pid() !== 'strength') {
-      const t = l.target || prog().reps;
-      if (!(l.reps.length && l.reps.every(r => r >= t))) return l.weight;
+      if (!(l.reps.length && l.reps.every((r, i) => r >= (l.targets ? tgt(l, i) : (l.target || prog().reps))))) return l.weight;
     }
     return l.weight + inc(lift);
   }
@@ -215,7 +249,7 @@
   }
   function dayLifts(type) {
     if (pid() === 'strength') return [
-      ...WORKOUTS[type].map(name => ({ name, sets:SETS, target:REPS, bw:false })),
+      ...WORKOUTS[type].map(name => ({ name, sets:SETS, target:REPS, bw:false, targets:twentyTargets() })),
       ...state.extras.filter(e => e.on[type]).map(e => ({ name:e.name, sets:e.sets, target:e.reps, extra:true, bw:!!e.bw })),
     ];
     return (state.volumeDays[type] || []).map(parseLine).filter(Boolean);
@@ -249,6 +283,7 @@
   function render() {
     document.querySelectorAll('nav button').forEach(b => b.classList.toggle('on', b.dataset.tab === tab));
     view.innerHTML = '';
+    document.querySelectorAll('.modal').forEach(x => x.remove());
     if (!state.started) return renderSetup();
     ({ workout:renderWorkout, history:renderHistory, progress:renderProgress, settings:renderSettings })[tab]();
   }
@@ -265,6 +300,25 @@
     view.append(c);
   }
 
+  function offerDeload(d) {
+    const items = d.lifts.filter(l => !l.deloadAsked).map(l => ({ l, to:stalledDeload(l.name) })).filter(x => x.to !== null);
+    if (!items.length) return;
+    const m = el(`<div class="modal"><div class="box"><h2>Deload?</h2>
+      <p class="hint" style="margin:6px 0 10px">You missed your reps on these lifts in your last 2 workouts in a row. Deload by 10% for this workout?</p>
+      ${items.map((x, i) => `<label class="dl"><input type="checkbox" checked data-i="${i}"><span><b>${esc(x.l.name)}</b>: ${fmt(x.l.weight)} → ${fmt(x.to)} kg</span></label>`).join('')}
+      <div class="row" style="margin-top:12px"><button class="ghost grow" id="dno">Not now</button><button class="primary grow" id="dyes" style="width:auto">Deload</button></div></div></div>`);
+    const done = apply => {
+      items.forEach((x, i) => {
+        x.l.deloadAsked = true;
+        if (apply && m.querySelector(`input[data-i="${i}"]`).checked) { x.l.weight = x.to; x.l.deload = true; }
+      });
+      save(); m.remove(); render();
+    };
+    m.querySelector('#dno').onclick = () => done(false);
+    m.querySelector('#dyes').onclick = () => done(true);
+    document.body.append(m);
+  }
+
   function renderWorkout() {
     ensureDraft();
     const d = state.draft;
@@ -272,11 +326,12 @@
     const intro = el(`<div class="card"><div class="row"><div class="grow"><h2>Workout ${d.type} <span class="sub">#${hist().length + 1} · ${prog().name}</span></h2>
       <div class="sub">${last ? `Last: ${last.type} on ${last.date} · ${pid() === 'strength' ? 'weights increased' : 'weight rises when every set hits target'}` : 'First session · starting weights'}</div></div></div></div>`);
     view.append(intro);
+    offerDeload(d);
 
     d.lifts.forEach((lift, li) => {
       const up = lift.prev !== null && lift.weight > lift.prev;
       const c = el(`<div class="card lift${lift.sets > 5 ? ' wide' : ''}"><div class="info"><h2>${esc(lift.name)}</h2>
-        <div class="sub">${lift.extra ? `${lift.sets}×${lift.target} · ` : ''}${lift.bw ? 'BW + ' : ''}${lift.prev !== null ? `last ${fmt(lift.prev)}${up ? ` (+${fmt(lift.weight - lift.prev)})` : ''}` : 'first time'}</div>
+        <div class="sub">${lift.extra ? `${lift.sets}×${lift.target} · ` : ''}${mixedTargets(lift) ? lift.targets.join(' ') + ' · ' : ''}${lift.bw ? 'BW + ' : ''}${lift.prev !== null ? `last ${fmt(lift.prev)}${up ? ` (+${fmt(lift.weight - lift.prev)})` : ''}` : 'first time'}${lift.deload ? ' · deload −10%' : ''}</div>
         <div class="weight"><button class="step" data-d="-${inc(lift.name)}">−</button>
           <input type="number" step="0.5" min="0" value="${fmt(lift.weight)}"><span class="sub">${lift.bw ? '+kg' : 'kg'}</span>
           <button class="step" data-d="${inc(lift.name)}">+</button></div></div>
@@ -291,14 +346,15 @@
         const b = document.createElement('button');
         const paint = () => {
           const v = lift.reps[si];
-          b.textContent = v === null ? '' : v;
-          b.className = 'set' + (v === null ? '' : v >= lift.target ? ' done' : v === 0 ? ' miss' : ' part');
+          const goal = tgt(lift, si);
+          b.textContent = v === null ? (mixedTargets(lift) ? goal : '') : v;
+          b.className = 'set' + (v === null ? (mixedTargets(lift) ? ' pre' : '') : v >= goal ? ' done' : v === 0 ? ' miss' : ' part');
         };
         paint();
         // Tap cycle: blank → 5 → 4 → 3 → 2 → 1 → 0 → blank
         b.onclick = () => {
           const v = lift.reps[si];
-          lift.reps[si] = v === null ? lift.target : v === 0 ? null : v - 1;
+          lift.reps[si] = v === null ? tgt(lift, si) : v === 0 ? null : v - 1;
           paint(); save();
         };
         sets.append(b);
@@ -316,7 +372,7 @@
         date: iso(new Date()),
         type: d.type,
         program: pid(),
-        lifts: d.lifts.map(l => ({ name:l.name, weight:l.weight, target:l.target, bw:!!l.bw, reps:l.reps.map(r => r === null ? 0 : r) })),
+        lifts: d.lifts.map(l => ({ name:l.name, weight:l.weight, target:l.target, targets:l.targets || null, bw:!!l.bw, deloaded:!!l.deload, reps:l.reps.map(r => r === null ? 0 : r) })),
       });
       state.draft = null; save(); tab = 'history'; render();
     };
@@ -328,13 +384,11 @@
   const iso = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
   const parse = s => new Date(s + 'T00:00:00');
 
-  // One colour per program + workout letter, used on the calendar and history cards.
-  const WCOLOR = {
-    strength: { A:'#2563eb', B:'#16a34a' },
-    vol10:    { A:'#d97706', B:'#dc2626', C:'#9333ea' },
-    vol20:    { A:'#0891b2', B:'#be185d', C:'#65a30d' },
-  };
-  const wcolor = w => (WCOLOR[w.program || 'strength'] || WCOLOR.strength)[w.type] || '#6b7280';
+  // Calendar marker: outer ring = program, pale fill = workout letter (A/B/C).
+  const RING = { strength:'#2563eb', vol10:'#dc2626', vol20:'#16a34a' };
+  const FILL = { A:'#fef08a', B:'#e9d5ff', C:'#fed7aa' };
+  const wcolor = w => RING[w.program || 'strength'] || RING.strength;     // ring colour
+  const wfill = w => FILL[w.type] || '#e5e7eb';                            // pale centre
 
   let calY = new Date().getFullYear(), calM = new Date().getMonth();
 
@@ -348,14 +402,14 @@
     const monthWorkouts = state.history.filter(w => w.date.startsWith(`${calY}-${pad(calM + 1)}`)).length;
     const seen = new Map();
     state.history.forEach(w => { const k = (w.program || 'strength') + w.type; if (!seen.has(k)) seen.set(k, w); });
-    const legend = seen.size ? `<div class="legend">${[...seen.values()].map(w => `<span><i style="background:${wcolor(w)}"></i>${(PROGRAMS[w.program || 'strength'] || PROGRAMS.strength).name} ${w.type}</span>`).join('')}</div>` : '';
+    const legend = seen.size ? `<div class="legend">${[...seen.values()].map(w => `<span><i style="border-color:${wcolor(w)};background:${wfill(w)}"></i>${(PROGRAMS[w.program || 'strength'] || PROGRAMS.strength).name} ${w.type}</span>`).join('')}</div>` : '';
     let cells = '';
     for (let i = 0; i < lead; i++) cells += '<span></span>';
     for (let d = 1; d <= days; d++) {
       const ds = `${calY}-${pad(calM + 1)}-${pad(d)}`;
       const w = byDay[ds];
       const cls = 'day' + (ds === todayStr ? ' today' : '') + (w ? ' tw' : '');
-      cells += `<button class="${cls}" ${w ? `data-id="${w[0].id}" style="background:${wcolor(w[w.length - 1])}"` : 'disabled'}>${w ? w[w.length - 1].type : d}</button>`;
+      cells += `<button class="${cls}" ${w ? `data-id="${w[0].id}" style="border-color:${wcolor(w[w.length - 1])};background:${wfill(w[w.length - 1])}"` : 'disabled'}>${w ? w[w.length - 1].type : d}</button>`;
     }
     const c = el(`<div class="card"><div class="row"><button class="ghost" data-m="-1">‹</button>
       <div class="grow" style="text-align:center"><h2>${first.toLocaleDateString(undefined, { month:'long', year:'numeric' })}</h2>
@@ -489,13 +543,33 @@
     return c;
   }
 
+  const draftHasSets = () => !!(state.draft && state.draft.lifts.some(l => l.reps.some(r => r !== null)));
+
+  function twentyCard() {
+    const t = state.twenty;
+    const c = el(`<div class="card setup"><h2>High-rep sets</h2>
+      <p class="hint">Swap some of the 5-rep sets on your main lifts for one higher-rep set, for a mix of heavy and volume. Example: 3 sets at the <b>start</b> gives 20 20 20 5 5. 1 set at the <b>end</b> gives 5 5 5 5 20.</p>
+      <div class="seg" style="margin:0 0 8px">${[['off', 'Off'], ['start', 'First sets'], ['end', 'Last sets']].map(([k, n]) => `<button data-m="${k}" class="${t.mode === k ? 'on' : ''}">${n}</button>`).join('')}</div>
+      <label>How many sets<input id="tn" type="number" min="1" max="${SETS - 1}" value="${t.count}"></label>
+      <label>Reps per high-rep set<input id="tr" type="number" min="1" max="99" value="${t.reps}"></label></div>`);
+    const apply = (mode = t.mode) => {
+      if (draftHasSets() && !confirm('Changing this resets the unfinished workout. Continue?')) return render();
+      state.twenty = { mode, count:Math.min(SETS - 1, Math.max(1, Number(c.querySelector('#tn').value) || 1)), reps:Math.min(99, Math.max(1, Number(c.querySelector('#tr').value) || 20)) };
+      state.draft = null; save(); render();
+    };
+    c.querySelectorAll('[data-m]').forEach(b => b.onclick = () => apply(b.dataset.m));
+    c.querySelector('#tn').onchange = () => apply();
+    c.querySelector('#tr').onchange = () => apply();
+    return c;
+  }
+
   function programCard() {
     const c = el(`<div class="card"><h2>Program</h2>
       <p class="hint">Switch between your strength program and the volume program. Each keeps its own history and weights. Your data is never deleted when you switch.</p>
       <div class="seg" style="margin:0">${Object.keys(PROGRAMS).map(k => `<button data-p="${k}" class="${k === pid() ? 'on' : ''}">${PROGRAMS[k].name}</button>`).join('')}</div></div>`);
     c.querySelectorAll('[data-p]').forEach(b => b.onclick = () => {
       if (b.dataset.p === pid()) return;
-      if (state.draft && state.draft.lifts.some(l => l.reps.some(r => r !== null)) && !confirm('Switch program? Your unfinished workout will be discarded.')) return;
+      if (draftHasSets() && !confirm('Switch program? Your unfinished workout will be discarded.')) return;
       state.program = b.dataset.p; state.draft = null; save(); render();
     });
     return c;
@@ -514,9 +588,16 @@
     return c;
   }
 
+  const APP_VERSION = 12;   // keep in step with CACHE in sw.js
+  function versionNote() {
+    const n = el(`<p class="hint" style="text-align:center">Page version ${APP_VERSION}</p>`);
+    try { caches.keys().then(k => { n.textContent += ' · offline cache ' + (k.join(', ') || 'none'); }); } catch (e) {}
+    return n;
+  }
+
   function renderSettings() {
     view.append(programCard());
-    view.append(pid() === 'strength' ? extrasCard() : volumeCard());
+    if (pid() === 'strength') { view.append(twentyCard()); view.append(extrasCard()); } else view.append(volumeCard());
     const c = el(`<div class="card"><h2>Data</h2>
       <p class="hint">Your data is stored in this browser only. Export a backup now and then.</p>
       <div class="row" style="flex-wrap:wrap">
@@ -550,6 +631,7 @@
       state.draft = null; save(); alert('Saved'); render();
     };
     view.append(s);
+    view.append(versionNote());
   }
 
   document.querySelectorAll('nav button').forEach(b => b.onclick = () => { tab = b.dataset.tab; render(); });
