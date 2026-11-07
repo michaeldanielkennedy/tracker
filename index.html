@@ -38,7 +38,10 @@
   .weight .step { width:28px; height:28px; padding:0; border-radius:8px; border:1px solid var(--line); background:var(--bg); color:var(--text); font-size:1.1rem; cursor:pointer; }
   .tag { font-size:.75rem; padding:2px 8px; border-radius:99px; background:var(--bg); border:1px solid var(--line); color:var(--muted); }
   .tag.up { color:var(--ok); border-color:var(--ok); }
-  .lift { display:flex; align-items:center; gap:8px; }
+  .lift { display:flex; flex-wrap:wrap; align-items:center; gap:8px; }
+  .warm { flex:0 0 100%; display:flex; flex-wrap:wrap; align-items:center; gap:5px; margin-top:-2px; }
+  .chip { padding:3px 9px; border:1.5px solid var(--line); border-radius:99px; background:var(--bg); color:var(--muted); font-size:.75rem; cursor:pointer; }
+  .chip.on { background:var(--ok); border-color:var(--ok); color:#fff; }
   .info { flex:1; min-width:0; }
   .sets { display:flex; gap:4px; }
   .set { width:32px; height:32px; padding:0; flex:none; border-radius:50%; border:2px solid var(--line); background:var(--bg); color:var(--muted); font-size:1rem; font-weight:600; cursor:pointer; user-select:none; }
@@ -141,7 +144,10 @@
 
   function normalize(s) {
     s.extras = s.extras || [];
-    s.twenty = s.twenty || { mode:'off', count:3, reps:20 };
+    s.warmup = s.warmup || { on:false, reps:10 };
+    s.warmup.pcts = s.warmup.pcts || [50, 75];
+    s.warmup.lifts = s.warmup.lifts || [...ALL_LIFTS];
+    delete s.twenty;
     s.program = PROGRAMS[s.program] ? s.program : 'strength';
     s.volumeDays = s.volumeDays || JSON.parse(JSON.stringify(DEFAULT_VOLUME_DAYS));
     return s;
@@ -182,15 +188,14 @@
   // Per-set target reps (a lift may have a mix, e.g. 20 20 20 5 5). Older records have a single `target`.
   const tgt = (l, i) => (l.targets && l.targets[i] != null) ? l.targets[i] : (l.target || 5);
   const mixedTargets = l => !!(l.targets && l.targets.some(t => t !== l.targets[0]));
-  // Strength main lifts only: replace the first/last N sets with higher-rep sets.
-  function twentyTargets() {
-    const t = state.twenty || {};
-    if (t.mode !== 'start' && t.mode !== 'end') return null;
-    const n = Math.min(SETS - 1, Math.max(1, Number(t.count) || 1)), r = Math.max(1, Number(t.reps) || 20);
-    const arr = Array(SETS).fill(REPS);
-    for (let i = 0; i < n; i++) arr[t.mode === 'start' ? i : SETS - 1 - i] = r;
-    return arr;
+  // Warm-up sets: not part of the working sets, so they never affect progression or deloads.
+  function warmSpec(name, weight) {
+    const w = state.warmup;
+    if (!w.on || weight <= 0 || !(w.lifts || []).includes(name)) return null;
+    return { reps:w.reps, pcts:[...w.pcts], done:w.pcts.map(() => false) };
   }
+  // Set i is pcts[i] % of the working weight, rounded to 2.5 kg, never below the 20 kg bar or above the working weight.
+  const warmWeight = (l, i) => Math.min(l.weight, Math.max(20, Math.round(l.weight * (l.warm.pcts ? l.warm.pcts[i] : l.warm.pct) / 100 / 2.5) * 2.5));
 
   // ---- deload: missed target reps on a lift in the last 2 sessions in a row ----
   const missed = l => l.reps.some((r, i) => r < tgt(l, i));
@@ -249,7 +254,7 @@
   }
   function dayLifts(type) {
     if (pid() === 'strength') return [
-      ...WORKOUTS[type].map(name => ({ name, sets:SETS, target:REPS, bw:false, targets:twentyTargets() })),
+      ...WORKOUTS[type].map(name => ({ name, sets:SETS, target:REPS, bw:false })),
       ...state.extras.filter(e => e.on[type]).map(e => ({ name:e.name, sets:e.sets, target:e.reps, extra:true, bw:!!e.bw })),
     ];
     return (state.volumeDays[type] || []).map(parseLine).filter(Boolean);
@@ -259,12 +264,16 @@
     return {
       pid: pid(),
       type,
-      lifts: dayLifts(type).map(l => ({
-        ...l,
-        weight: targetWeight(l.name, l.bw),
-        prev: lastWeight(l.name),
-        reps: Array(l.sets).fill(null),   // null = not attempted yet
-      })),
+      lifts: dayLifts(type).map(l => {
+        const weight = targetWeight(l.name, l.bw);
+        return {
+          ...l,
+          weight,
+          prev: lastWeight(l.name),
+          reps: Array(l.sets).fill(null),   // null = not attempted yet
+          warm: warmSpec(l.name, weight),
+        };
+      }),
     };
   }
   function ensureDraft() {
@@ -335,11 +344,25 @@
         <div class="weight"><button class="step" data-d="-${inc(lift.name)}">−</button>
           <input type="number" step="0.5" min="0" value="${fmt(lift.weight)}"><span class="sub">${lift.bw ? '+kg' : 'kg'}</span>
           <button class="step" data-d="${inc(lift.name)}">+</button></div></div>
-        <div class="sets"></div></div>`);
+        <div class="sets"></div><div class="warm"></div></div>`);
+      const warmEl = c.querySelector('.warm');
+      const paintWarm = () => {
+        warmEl.innerHTML = '';
+        if (!lift.warm) return warmEl.remove();
+        warmEl.append(el(`<span class="sub">Warm-up</span>`));
+        lift.warm.done.forEach((dn, i) => {
+          const b = document.createElement('button');
+          b.className = 'chip' + (dn ? ' on' : '');
+          b.textContent = `${fmt(warmWeight(lift, i))} × ${lift.warm.reps}`;
+          b.onclick = () => { lift.warm.done[i] = !lift.warm.done[i]; paintWarm(); save(); };
+          warmEl.append(b);
+        });
+      };
+      paintWarm();
       const input = c.querySelector('input');
-      input.onchange = () => { lift.weight = Math.max(0, Number(input.value) || 0); save(); };
+      input.onchange = () => { lift.weight = Math.max(0, Number(input.value) || 0); paintWarm(); save(); };
       c.querySelectorAll('.step').forEach(b => b.onclick = () => {
-        lift.weight = Math.max(0, lift.weight + Number(b.dataset.d)); input.value = fmt(lift.weight); save();
+        lift.weight = Math.max(0, lift.weight + Number(b.dataset.d)); input.value = fmt(lift.weight); paintWarm(); save();
       });
       const sets = c.querySelector('.sets');
       lift.reps.forEach((r, si) => {
@@ -372,7 +395,7 @@
         date: iso(new Date()),
         type: d.type,
         program: pid(),
-        lifts: d.lifts.map(l => ({ name:l.name, weight:l.weight, target:l.target, targets:l.targets || null, bw:!!l.bw, deloaded:!!l.deload, reps:l.reps.map(r => r === null ? 0 : r) })),
+        lifts: d.lifts.map(l => ({ name:l.name, weight:l.weight, target:l.target, targets:l.targets || null, warm:l.warm ? l.warm.done.map((dn, i) => ({ w:warmWeight(l, i), r:l.warm.reps, done:dn })) : null, bw:!!l.bw, deloaded:!!l.deload, reps:l.reps.map(r => r === null ? 0 : r) })),
       });
       state.draft = null; save(); tab = 'history'; render();
     };
@@ -429,7 +452,7 @@
     view.append(calendar());
     if (!state.history.length) return view.append(el(`<div class="empty">No workouts yet.</div>`));
     [...state.history].reverse().forEach(w => {
-      const rows = w.lifts.map(l => `<tr><td>${l.name}</td><td>${l.bw ? (l.weight ? 'BW + ' + fmt(l.weight) + ' kg' : 'BW') : fmt(l.weight) + ' kg'}</td><td>${l.reps.join(' / ')}</td></tr>`).join('');
+      const rows = w.lifts.map(l => `<tr><td>${l.name}</td><td>${l.bw ? (l.weight ? 'BW + ' + fmt(l.weight) + ' kg' : 'BW') : fmt(l.weight) + ' kg'}</td><td>${l.reps.join(' / ')}${l.warm ? `<div class="sub">Warm-up ${l.warm.map(x => `${fmt(x.w)}×${x.r}${x.done ? '✓' : ''}`).join(' ')}</div>` : ''}</td></tr>`).join('');
       const c = el(`<div class="card" id="w-${w.id}" style="border-left:4px solid ${wcolor(w)}"><div class="row"><div class="grow"><h2>Workout ${w.type}</h2><div class="sub">${w.date} · ${PROGRAMS[w.program || 'strength'].name}</div></div>
         <button class="ghost danger">Delete</button></div>
         <table><tr><th>Lift</th><th>Weight</th><th>Reps per set</th></tr>${rows}</table></div>`);
@@ -545,21 +568,25 @@
 
   const draftHasSets = () => !!(state.draft && state.draft.lifts.some(l => l.reps.some(r => r !== null)));
 
-  function twentyCard() {
-    const t = state.twenty;
-    const c = el(`<div class="card setup"><h2>High-rep sets</h2>
-      <p class="hint">Swap some of the 5-rep sets on your main lifts for one higher-rep set, for a mix of heavy and volume. Example: 3 sets at the <b>start</b> gives 20 20 20 5 5. 1 set at the <b>end</b> gives 5 5 5 5 20.</p>
-      <div class="seg" style="margin:0 0 8px">${[['off', 'Off'], ['start', 'First sets'], ['end', 'Last sets']].map(([k, n]) => `<button data-m="${k}" class="${t.mode === k ? 'on' : ''}">${n}</button>`).join('')}</div>
-      <label>How many sets<input id="tn" type="number" min="1" max="${SETS - 1}" value="${t.count}"></label>
-      <label>Reps per high-rep set<input id="tr" type="number" min="1" max="99" value="${t.reps}"></label></div>`);
-    const apply = (mode = t.mode) => {
+  function warmupCard() {
+    const t = state.warmup;
+    const c = el(`<div class="card setup"><h2>Warm-up sets</h2>
+      <p class="hint">Adds lighter warm-up sets before your working sets on the lifts you choose. Warm-ups are tracked separately and never affect progression. Each set is a % of your working weight (default 50% then 75%), never below the 20 kg bar.</p>
+      <div class="seg" style="margin:0 0 8px">${[[false, 'Off'], [true, 'On']].map(([k, n]) => `<button data-on="${k}" class="${t.on === k ? 'on' : ''}">${n}</button>`).join('')}</div>
+      <label>Reps per warm-up set (up to 20)<input id="wr" type="number" min="1" max="20" value="${t.reps}"></label>
+      <label>Set percentages (max 4)<input id="wp" type="text" inputmode="numeric" value="${t.pcts.join(', ')}"></label>
+      <div class="sub" style="margin:6px 0 2px">Apply to:</div>
+      <div class="xrow" style="flex-wrap:wrap;gap:4px 12px;border:0">${ALL_LIFTS.map(l => `<label class="chk"><input type="checkbox" data-l="${l}" ${(t.lifts || []).includes(l) ? 'checked' : ''}>${l}</label>`).join('')}</div></div>`);
+    const num = (id, lo, hi, d) => Math.min(hi, Math.max(lo, Number(c.querySelector(id).value) || d));
+    const apply = (on = t.on) => {
       if (draftHasSets() && !confirm('Changing this resets the unfinished workout. Continue?')) return render();
-      state.twenty = { mode, count:Math.min(SETS - 1, Math.max(1, Number(c.querySelector('#tn').value) || 1)), reps:Math.min(99, Math.max(1, Number(c.querySelector('#tr').value) || 20)) };
+      const pcts = c.querySelector('#wp').value.split(/[,\s]+/).map(Number).filter(n => n > 0).slice(0, 4).map(n => Math.min(95, Math.max(20, n)));
+      state.warmup = { on, reps:num('#wr', 1, 20, 10), pcts:pcts.length ? pcts : [50, 75],
+        lifts:[...c.querySelectorAll('input[data-l]')].filter(i => i.checked).map(i => i.dataset.l) };
       state.draft = null; save(); render();
     };
-    c.querySelectorAll('[data-m]').forEach(b => b.onclick = () => apply(b.dataset.m));
-    c.querySelector('#tn').onchange = () => apply();
-    c.querySelector('#tr').onchange = () => apply();
+    c.querySelectorAll('[data-on]').forEach(b => b.onclick = () => apply(b.dataset.on === 'true'));
+    c.querySelectorAll('input').forEach(i => i.onchange = () => apply());
     return c;
   }
 
@@ -588,7 +615,7 @@
     return c;
   }
 
-  const APP_VERSION = 12;   // keep in step with CACHE in sw.js
+  const APP_VERSION = 15;   // keep in step with CACHE in sw.js
   function versionNote() {
     const n = el(`<p class="hint" style="text-align:center">Page version ${APP_VERSION}</p>`);
     try { caches.keys().then(k => { n.textContent += ' · offline cache ' + (k.join(', ') || 'none'); }); } catch (e) {}
@@ -597,7 +624,8 @@
 
   function renderSettings() {
     view.append(programCard());
-    if (pid() === 'strength') { view.append(twentyCard()); view.append(extrasCard()); } else view.append(volumeCard());
+    view.append(warmupCard());
+    view.append(pid() === 'strength' ? extrasCard() : volumeCard());
     const c = el(`<div class="card"><h2>Data</h2>
       <p class="hint">Your data is stored in this browser only. Export a backup now and then.</p>
       <div class="row" style="flex-wrap:wrap">
